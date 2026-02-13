@@ -83,8 +83,9 @@ class GDriveClient:
             files = resp.json().get("files", [])
 
             if files:
-                logger.info("Found existing folder '%s' (%s)", folder_name, files[0]["id"])
-                return files[0]["id"]
+                folder_id: str = files[0]["id"]
+                logger.info("Found existing folder '%s' (%s)", folder_name, folder_id)
+                return folder_id
 
             # Create folder
             resp = await client.post(
@@ -97,9 +98,9 @@ class GDriveClient:
                 headers={**headers, "Content-Type": "application/json"},
             )
             resp.raise_for_status()
-            folder_id = resp.json()["id"]
-            logger.info("Created folder '%s' (%s)", folder_name, folder_id)
-            return folder_id
+            new_folder_id: str = resp.json()["id"]
+            logger.info("Created folder '%s' (%s)", folder_name, new_folder_id)
+            return new_folder_id
 
     async def upload_file(self, file_path: str | Path, folder_id: str) -> dict:
         """Upload a file to Google Drive via multipart upload. Returns API response dict."""
@@ -140,7 +141,7 @@ class GDriveClient:
             raise RuntimeError(f"Upload failed: {result}")
 
         logger.info("Uploaded %s -> %s (id=%s)", file_path.name, folder_id, result["id"])
-        return result
+        return dict(result)
 
     async def list_files(self, folder_id: str) -> list[dict]:
         """List files in a folder."""
@@ -155,4 +156,5 @@ class GDriveClient:
                 headers=headers,
             )
             resp.raise_for_status()
-            return resp.json().get("files", [])
+            files: list[dict] = resp.json().get("files", [])
+            return files
