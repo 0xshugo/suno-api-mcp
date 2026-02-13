@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install ruff mypy
+
+      - name: Run Ruff (lint + format check)
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Run mypy (type check)
+        run: |
+          pip install -r requirements.txt
+          mypy server.py gdrive_client.py --ignore-missing-imports
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: suno-mcp:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  test-import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Test module imports
+        run: |
+          python -c "import server; print('server.py: OK')"
+          python -c "import gdrive_client; print('gdrive_client.py: OK')"

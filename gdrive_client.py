@@ -35,8 +35,7 @@ class GDriveClient:
 
         if not all([self._client_id, self._client_secret, self._refresh_token]):
             raise RuntimeError(
-                "GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET, and "
-                "GDRIVE_REFRESH_TOKEN must all be set"
+                "GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET, and GDRIVE_REFRESH_TOKEN must all be set"
             )
 
         async with httpx.AsyncClient() as client:
@@ -65,9 +64,7 @@ class GDriveClient:
         token = await self.authenticate()
         return {"Authorization": f"Bearer {token}"}
 
-    async def get_or_create_folder(
-        self, folder_name: str, parent_id: str
-    ) -> str:
+    async def get_or_create_folder(self, folder_name: str, parent_id: str) -> str:
         """Find existing folder by name under parent, or create it. Returns folder ID."""
         headers = await self._headers()
         query = (
@@ -104,9 +101,7 @@ class GDriveClient:
             logger.info("Created folder '%s' (%s)", folder_name, folder_id)
             return folder_id
 
-    async def upload_file(
-        self, file_path: str | Path, folder_id: str
-    ) -> dict:
+    async def upload_file(self, file_path: str | Path, folder_id: str) -> dict:
         """Upload a file to Google Drive via multipart upload. Returns API response dict."""
         file_path = Path(file_path)
         if not file_path.exists():
@@ -115,21 +110,17 @@ class GDriveClient:
         headers = await self._headers()
         file_content = file_path.read_bytes()
 
-        metadata = json.dumps({
-            "name": file_path.name,
-            "parents": [folder_id],
-        }).encode()
+        metadata = json.dumps(
+            {
+                "name": file_path.name,
+                "parents": [folder_id],
+            }
+        ).encode()
 
         boundary = "-------314159265358979323846"
-        body = (
-            f"--{boundary}\r\n"
-            f"Content-Type: application/json; charset=UTF-8\r\n\r\n"
-        ).encode()
+        body = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n").encode()
         body += metadata
-        body += (
-            f"\r\n--{boundary}\r\n"
-            f"Content-Type: application/octet-stream\r\n\r\n"
-        ).encode()
+        body += (f"\r\n--{boundary}\r\nContent-Type: application/octet-stream\r\n\r\n").encode()
         body += file_content
         body += f"\r\n--{boundary}--".encode()
 
