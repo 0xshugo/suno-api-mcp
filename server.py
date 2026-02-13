@@ -71,12 +71,32 @@ def _get_gdrive() -> GDriveClient:
 
 # DnB-flavoured fallback title words
 DNB_ADJECTIVES = [
-    "Liquid", "Deep", "Velvet", "Cosmic", "Astral", "Crystal",
-    "Neon", "Ethereal", "Midnight", "Solar", "Lunar", "Silent",
+    "Liquid",
+    "Deep",
+    "Velvet",
+    "Cosmic",
+    "Astral",
+    "Crystal",
+    "Neon",
+    "Ethereal",
+    "Midnight",
+    "Solar",
+    "Lunar",
+    "Silent",
 ]
 DNB_NOUNS = [
-    "Flow", "Ether", "Pulse", "Drift", "Wave", "Haze",
-    "Echo", "Vapor", "Horizon", "Current", "Storm", "Rain",
+    "Flow",
+    "Ether",
+    "Pulse",
+    "Drift",
+    "Wave",
+    "Haze",
+    "Echo",
+    "Vapor",
+    "Horizon",
+    "Current",
+    "Storm",
+    "Rain",
 ]
 
 MCP_PORT = int(os.environ.get("MCP_PORT", "8888"))
@@ -214,14 +234,11 @@ def _resolve_output_dir(output_dir: str) -> tuple[Path, bool]:
     if target in OUTPUT_TARGETS:
         return OUTPUT_TARGETS[target], target == "gdrive"
     raise ValueError(
-        f"Unknown output_dir '{output_dir}'. "
-        f"Valid targets: {', '.join(OUTPUT_TARGETS.keys())}"
+        f"Unknown output_dir '{output_dir}'. Valid targets: {', '.join(OUTPUT_TARGETS.keys())}"
     )
 
 
-async def _download_wav(
-    client: httpx.AsyncClient, track: dict, dest_dir: Path
-) -> Path:
+async def _download_wav(client: httpx.AsyncClient, track: dict, dest_dir: Path) -> Path:
     """Download track as WAV, trying multiple strategies."""
     track_id = track.get("id", "unknown")
     title = track.get("title") or _generate_fallback_title()
@@ -242,7 +259,9 @@ async def _download_wav(
             resp = await client.head(wav_url, timeout=15, follow_redirects=True)
             content_type = resp.headers.get("content-type", "")
             if resp.status_code == 200 and "audio" in content_type:
-                async with client.stream("GET", wav_url, timeout=120, follow_redirects=True) as stream:
+                async with client.stream(
+                    "GET", wav_url, timeout=120, follow_redirects=True
+                ) as stream:
                     stream.raise_for_status()
                     with open(dest, "wb") as f:
                         async for chunk in stream.aiter_bytes(chunk_size=65536):
@@ -265,8 +284,14 @@ async def _download_wav(
 
         result = subprocess.run(
             [
-                "ffmpeg", "-y", "-i", str(mp3_tmp),
-                "-acodec", "pcm_s16le", "-ar", "44100",
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(mp3_tmp),
+                "-acodec",
+                "pcm_s16le",
+                "-ar",
+                "44100",
                 str(dest),
             ],
             capture_output=True,
@@ -276,14 +301,14 @@ async def _download_wav(
 
         if result.returncode == 0 and dest.exists():
             return dest
-        raise RuntimeError(
-            f"ffmpeg conversion failed: {result.stderr[:500]}"
-        )
+        raise RuntimeError(f"ffmpeg conversion failed: {result.stderr[:500]}")
 
     raise RuntimeError(f"No audio URL found for track {track_id}")
 
 
-async def _poll_generation(client: httpx.AsyncClient, clip_ids: list[str], timeout: int = 300) -> list[dict]:
+async def _poll_generation(
+    client: httpx.AsyncClient, clip_ids: list[str], timeout: int = 300
+) -> list[dict]:
     """Poll for generation completion."""
     headers = await _get_auth_headers()
     start_time = asyncio.get_event_loop().time()
@@ -304,8 +329,7 @@ async def _poll_generation(client: httpx.AsyncClient, clip_ids: list[str], timeo
 
         clips = data.get("clips", [])
         all_complete = all(
-            clip.get("status") in ("complete", "error", "streaming")
-            for clip in clips
+            clip.get("status") in ("complete", "error", "streaming") for clip in clips
         )
 
         if all_complete:
@@ -373,8 +397,13 @@ async def generate_liquid_dnb(
             "user_uploaded_images_b64": None,
         }
 
-        logger.info("Generating: tags=%s, title=%s, instrumental=%s, model=%s",
-                    tags, title, instrumental, model)
+        logger.info(
+            "Generating: tags=%s, title=%s, instrumental=%s, model=%s",
+            tags,
+            title,
+            instrumental,
+            model,
+        )
 
         async with httpx.AsyncClient() as client:
             # Start generation using v2-web endpoint
@@ -407,7 +436,9 @@ async def generate_liquid_dnb(
             results = []
             for clip in completed_clips:
                 if clip.get("status") == "error":
-                    results.append(f"Failed ({clip.get('id')}): {clip.get('error_message', 'Unknown error')}")
+                    results.append(
+                        f"Failed ({clip.get('id')}): {clip.get('error_message', 'Unknown error')}"
+                    )
                     continue
 
                 track = {
