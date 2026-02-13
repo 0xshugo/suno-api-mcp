@@ -56,8 +56,16 @@ OUTPUT_TARGETS: dict[str, Path] = {
 }
 DEFAULT_OUTPUT = "library"
 
-for d in set(OUTPUT_TARGETS.values()):
-    d.mkdir(parents=True, exist_ok=True)
+
+def _ensure_output_dirs() -> None:
+    """Create output directories if they don't exist."""
+    for d in set(OUTPUT_TARGETS.values()):
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            # Skip if we can't create (e.g., CI environment)
+            pass
+
 
 _gdrive: GDriveClient | None = None
 
@@ -327,7 +335,7 @@ async def _poll_generation(
         resp.raise_for_status()
         data = resp.json()
 
-        clips = data.get("clips", [])
+        clips: list[dict] = data.get("clips", [])
         all_complete = all(
             clip.get("status") in ("complete", "error", "streaming") for clip in clips
         )
@@ -361,6 +369,7 @@ async def generate_liquid_dnb(
                     "gdrive" = save to library + upload to Google Drive.
         model: Suno model version. Options: "chirp-v4" (default), "chirp-v3-5", "chirp-crow" (v5).
     """
+    _ensure_output_dirs()
     dest_dir, upload_gdrive = _resolve_output_dir(output_dir)
 
     if upload_gdrive and not GDRIVE_MUSIC_FOLDER_ID:
@@ -517,25 +526,25 @@ async def list_tracks(output_dir: str = "library") -> str:
             return "Error: GDRIVE_MUSIC_FOLDER_ID is not configured."
         try:
             gdrive = _get_gdrive()
-            files = await gdrive.list_files(GDRIVE_MUSIC_FOLDER_ID)
-            if not files:
+            gdrive_files = await gdrive.list_files(GDRIVE_MUSIC_FOLDER_ID)
+            if not gdrive_files:
                 return "No tracks in gdrive."
-            lines = [f"[gdrive] {len(files)} files:"]
-            for f in files:
-                size_mb = int(f.get("size", 0)) / (1024 * 1024)
-                lines.append(f"  {f['name']}  ({size_mb:.1f} MB)  id={f['id']}")
+            lines: list[str] = [f"[gdrive] {len(gdrive_files)} files:"]
+            for gf in gdrive_files:
+                size_mb = int(gf.get("size", 0)) / (1024 * 1024)
+                lines.append(f"  {gf['name']}  ({size_mb:.1f} MB)  id={gf['id']}")
             return "\n".join(lines)
         except Exception as e:
             return f"Error listing gdrive: {e}"
 
     dest_dir, _ = _resolve_output_dir(output_dir)
-    files = sorted(dest_dir.glob("*.wav"))
-    if not files:
+    local_files = sorted(dest_dir.glob("*.wav"))
+    if not local_files:
         return f"No tracks in {output_dir}."
-    lines = [f"[{output_dir}] {len(files)} tracks:"]
-    for f in files:
-        size_mb = f.stat().st_size / (1024 * 1024)
-        lines.append(f"  {f.name}  ({size_mb:.1f} MB)")
+    lines = [f"[{output_dir}] {len(local_files)} tracks:"]
+    for lf in local_files:
+        size_mb = lf.stat().st_size / (1024 * 1024)
+        lines.append(f"  {lf.name}  ({size_mb:.1f} MB)")
     return "\n".join(lines)
 
 
