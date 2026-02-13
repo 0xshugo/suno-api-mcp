@@ -1,0 +1,43 @@
+# Environment files with secrets
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+.eggs/
+*.egg-info/
+dist/
+build/
+
+# Output data
+output/
+music_data/
+
+# Backup and temp files
+*.bak
+*.tmp
+*.swp
+*~
+
+# Legacy/archive directories
+archive_data/
+suno-api-src/
+streamer/
+assets/
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,13 @@
+services:
+  suno-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: suno-mcp
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./music_data:/data/music
