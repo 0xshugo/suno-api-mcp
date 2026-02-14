@@ -39,7 +39,7 @@ GDRIVE_MUSIC_FOLDER_ID = os.environ.get("GDRIVE_MUSIC_FOLDER_ID", "")
 SUNO_API_BASE = "https://studio-api.prod.suno.com"
 CLERK_BASE = "https://clerk.suno.com"
 CLERK_JS_VERSION = "5.56.0"
-DEFAULT_MODEL = "chirp-v4"
+DEFAULT_MODEL = "chirp-crow"
 
 # Token management
 _access_token: str = ""
@@ -354,7 +354,7 @@ async def generate_liquid_dnb(
     prompt: str = "",
     instrumental: bool = True,
     output_dir: str = "library",
-    model: str = "chirp-v4",
+    model: str = "chirp-crow",
 ) -> str:
     """Generate a track via Suno and save as WAV.
 
@@ -367,7 +367,7 @@ async def generate_liquid_dnb(
         output_dir: Output destination. "ch1" = broadcasting channel 1,
                     "ch2" = broadcasting channel 2, "library" = general library (default),
                     "gdrive" = save to library + upload to Google Drive.
-        model: Suno model version. Options: "chirp-v4" (default), "chirp-v3-5", "chirp-crow" (v5).
+        model: Suno model version. Options: "chirp-crow" (v5, default), "chirp-v4", "chirp-v3-5".
     """
     _ensure_output_dirs()
     dest_dir, upload_gdrive = _resolve_output_dir(output_dir)
