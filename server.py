@@ -16,6 +16,7 @@ import time
 import unicodedata
 import uuid
 from pathlib import Path
+from typing import Literal
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -353,8 +354,8 @@ async def generate_liquid_dnb(
     title: str = "",
     prompt: str = "",
     instrumental: bool = True,
-    output_dir: str = "library",
-    model: str = "chirp-crow",
+    output_dir: Literal["ch1", "ch2", "library", "gdrive"] = "library",
+    model: Literal["chirp-crow", "chirp-v4", "chirp-v3-5"] = "chirp-crow",
 ) -> str:
     """Generate a track via Suno and save as WAV.
 
