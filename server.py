@@ -382,27 +382,34 @@ async def generate_liquid_dnb(
         headers = await _get_auth_headers()
 
         # Build generation payload (v2-web format)
+        # Note: All fields must match browser request format exactly
         payload = {
-            "mv": model,
-            "make_instrumental": instrumental,
+            "token": None,
             "generation_type": "TEXT",
-            "prompt": prompt,
-            "tags": tags,
             "title": title,
+            "tags": tags,
             "negative_tags": "",
+            "artist_clip_id": None,
+            "artist_end_s": None,
+            "artist_start_s": None,
+            "continue_at": None,
+            "continue_clip_id": None,
+            "continued_aligned_prompt": None,
+            "cover_clip_id": None,
+            "cover_end_s": None,
+            "cover_start_s": None,
+            "make_instrumental": instrumental,
             "metadata": {
                 "web_client_pathname": "/create",
                 "is_max_mode": False,
                 "is_mumble": False,
                 "create_mode": "custom" if prompt else "simple",
             },
-            "transaction_uuid": str(uuid.uuid4()),
-            "token": None,
-            "artist_clip_id": None,
-            "continue_clip_id": None,
-            "cover_clip_id": None,
-            "persona_id": None,
+            "mv": model,
             "override_fields": [],
+            "persona_id": None,
+            "prompt": prompt,
+            "transaction_uuid": str(uuid.uuid4()),
             "user_uploaded_images_b64": None,
         }
 
