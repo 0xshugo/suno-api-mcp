@@ -207,12 +207,7 @@ async def _refresh_access_token() -> str:
         _consecutive_refresh_failures += 1
         _last_auth_error = str(e)
         _auth_state = "degraded"
-        logger.warning(
-            "Token refresh failed (%s/%s): %s",
-            _consecutive_refresh_failures,
-            MAX_REFRESH_FAILURES,
-            e,
-        )
+        logger.warning("Token refresh failed (%s/%s): %s", _consecutive_refresh_failures, MAX_REFRESH_FAILURES, e)
 
         if _consecutive_refresh_failures >= MAX_REFRESH_FAILURES:
             _auth_state = "reauth_required"
@@ -266,7 +261,7 @@ async def _get_auth_headers() -> dict:
 
 def _tool_response(message: str, status: str = "ok", **meta: object) -> str:
     """Return tool output in text (default) or JSON format for agent clients."""
-    payload: dict[str, object] = {"status": status, "message": message}
+    payload = {"status": status, "message": message}
     if meta:
         payload["meta"] = meta
 
@@ -282,15 +277,7 @@ def _tool_response(message: str, status: str = "ok", **meta: object) -> str:
 
 async def _send_auth_notification(reason: str, detail: str = "") -> None:
     """Send optional auth failure notification to generic/slack/discord webhooks."""
-    targets = [
-        u
-        for u in [
-            AUTH_NOTIFY_WEBHOOK_URL,
-            AUTH_NOTIFY_SLACK_WEBHOOK_URL,
-            AUTH_NOTIFY_DISCORD_WEBHOOK_URL,
-        ]
-        if u
-    ]
+    targets = [u for u in [AUTH_NOTIFY_WEBHOOK_URL, AUTH_NOTIFY_SLACK_WEBHOOK_URL, AUTH_NOTIFY_DISCORD_WEBHOOK_URL] if u]
     if not targets:
         return
 
@@ -675,11 +662,11 @@ async def get_auth_status() -> str:
         lines.append(f"last_auth_error: {_last_auth_error}")
 
     if _auth_state == "reauth_required":
-        lines.append(
-            "action: Rotate SUNO_REFRESH_TOKEN (__client) secret and restart the MCP server."
-        )
+        lines.append("action: Rotate SUNO_REFRESH_TOKEN (__client) secret and restart the MCP server.")
 
     return "\n".join(lines)
+
+
 
 
 @mcp.tool()
