@@ -261,7 +261,7 @@ async def _get_auth_headers() -> dict:
 
 def _tool_response(message: str, status: str = "ok", **meta: object) -> str:
     """Return tool output in text (default) or JSON format for agent clients."""
-    payload: dict[str, object] = {"status": status, "message": message}
+    payload = {"status": status, "message": message}
     if meta:
         payload["meta"] = meta
 

@@ -1,17 +1,16 @@
-import base64
-import json
 import os
+import requests
 import threading
 import time
+import json
+import base64
 import uuid
-from typing import Any, cast
+from typing import Any
 
-import requests  # type: ignore[import-untyped]
 
-_suno_cookie = os.getenv("SUNO_COOKIE")
-if not _suno_cookie:
+SUNO_COOKIE = os.getenv("SUNO_COOKIE")
+if not SUNO_COOKIE:
     raise ValueError("SUNO_COOKIE environment variable is required")
-SUNO_COOKIE: str = _suno_cookie
 
 
 class SunoV2Client:
@@ -86,11 +85,10 @@ class SunoV2Client:
             timeout=20,
         )
         response.raise_for_status()
-        data = cast(dict[str, Any], response.json())
-        session_id = cast(
-            str | None,
+        data = response.json()
+        session_id = (
             data.get("response", {}).get("last_active_session_id")
-            or data.get("last_active_session_id"),
+            or data.get("last_active_session_id")
         )
         if not session_id:
             raise RuntimeError("Unable to resolve last_active_session_id from Clerk API response")
@@ -106,8 +104,8 @@ class SunoV2Client:
             timeout=20,
         )
         response.raise_for_status()
-        data = cast(dict[str, Any], response.json())
-        token = cast(str | None, data.get("jwt"))
+        data = response.json()
+        token = data.get("jwt")
         if not token:
             raise RuntimeError(f"No jwt found in Clerk token response: {data}")
         self.access_token = token
@@ -132,7 +130,7 @@ class SunoV2Client:
         }
 
     def generate(self, prompt: str, tags: str, title: str, make_instrumental: bool = False) -> dict[str, Any]:
-        payload: dict[str, Any] = {
+        payload = {
             "token": None,
             "generation_type": "TEXT",
             "title": title,
@@ -169,7 +167,7 @@ class SunoV2Client:
             timeout=60,
         )
         response.raise_for_status()
-        return cast(dict[str, Any], response.json())
+        return response.json()
 
     def close(self) -> None:
         self._stop_event.set()
