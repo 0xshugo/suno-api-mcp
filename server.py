@@ -37,6 +37,11 @@ DEVICE_ID = os.environ.get("SUNO_DEVICE_ID", str(uuid.uuid4()))
 MUSIC_BASE = Path(os.environ.get("MUSIC_BASE", "/data/music"))
 GDRIVE_MUSIC_FOLDER_ID = os.environ.get("GDRIVE_MUSIC_FOLDER_ID", "")
 
+AUTH_NOTIFY_WEBHOOK_URL = os.environ.get("AUTH_NOTIFY_WEBHOOK_URL", "")
+AUTH_NOTIFY_SLACK_WEBHOOK_URL = os.environ.get("AUTH_NOTIFY_SLACK_WEBHOOK_URL", "")
+AUTH_NOTIFY_DISCORD_WEBHOOK_URL = os.environ.get("AUTH_NOTIFY_DISCORD_WEBHOOK_URL", "")
+TOOL_RESPONSE_FORMAT = os.environ.get("TOOL_RESPONSE_FORMAT", "text").strip().lower()
+
 SUNO_API_BASE = "https://studio-api.prod.suno.com"
 CLERK_BASE = "https://clerk.suno.com"
 CLERK_JS_VERSION = "5.56.0"
@@ -47,6 +52,14 @@ _access_token: str = ""
 _token_expires: float = 0.0
 _session_id: str = ""
 TOKEN_REFRESH_MARGIN = 30  # Refresh when < 30s remaining
+MAX_REFRESH_FAILURES = 3
+
+# Auth health state
+_auth_state: Literal["ok", "degraded", "reauth_required"] = "ok"
+_last_auth_error: str = ""
+_last_refresh_at: float | None = None
+_consecutive_refresh_failures = 0
+_reauth_required_since: float | None = None
 
 # Named output targets
 OUTPUT_TARGETS: dict[str, Path] = {
@@ -161,27 +174,56 @@ async def _resolve_session() -> str:
 async def _refresh_access_token() -> str:
     """Get fresh access token from Clerk."""
     global _access_token, _token_expires
+    global _auth_state, _last_auth_error, _last_refresh_at
+    global _consecutive_refresh_failures, _reauth_required_since
 
     session_id = await _resolve_session()
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"{CLERK_BASE}/v1/client/sessions/{session_id}/tokens",
-            params={"_is_native": "true", "_clerk_js_version": CLERK_JS_VERSION},
-            headers=_clerk_headers(),
-            timeout=30,
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{CLERK_BASE}/v1/client/sessions/{session_id}/tokens",
+                params={"_is_native": "true", "_clerk_js_version": CLERK_JS_VERSION},
+                headers=_clerk_headers(),
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            _access_token = data.get("jwt", "")
+            if not _access_token:
+                raise RuntimeError(f"Token refresh failed: {data}")
+
+            # Clerk tokens last ~60s, refresh at 30s remaining
+            _token_expires = time.monotonic() + 55
+            _last_refresh_at = time.time()
+            _consecutive_refresh_failures = 0
+            _last_auth_error = ""
+            _auth_state = "ok"
+            _reauth_required_since = None
+            logger.info("Access token refreshed, expires in ~55s")
+            return _access_token
+    except Exception as e:
+        _consecutive_refresh_failures += 1
+        _last_auth_error = str(e)
+        _auth_state = "degraded"
+        logger.warning(
+            "Token refresh failed (%s/%s): %s",
+            _consecutive_refresh_failures,
+            MAX_REFRESH_FAILURES,
+            e,
         )
-        resp.raise_for_status()
-        data = resp.json()
 
-        _access_token = data.get("jwt", "")
-        if not _access_token:
-            raise RuntimeError(f"Token refresh failed: {data}")
-
-        # Clerk tokens last ~60s, refresh at 30s remaining
-        _token_expires = time.monotonic() + 55
-        logger.info("Access token refreshed, expires in ~55s")
-        return _access_token
+        if _consecutive_refresh_failures >= MAX_REFRESH_FAILURES:
+            _auth_state = "reauth_required"
+            if _reauth_required_since is None:
+                _reauth_required_since = time.time()
+            await _send_auth_notification("clerk_refresh_failed", str(e))
+            raise RuntimeError(
+                "Authentication refresh failed repeatedly. "
+                "Re-authentication required: update SUNO_REFRESH_TOKEN."
+            ) from e
+        raise
 
 
 async def _ensure_token() -> str:
@@ -190,6 +232,11 @@ async def _ensure_token() -> str:
 
     # If using refresh token flow
     if SUNO_REFRESH_TOKEN:
+        if _auth_state == "reauth_required":
+            raise RuntimeError(
+                "Authentication is in reauth_required state. "
+                "Update SUNO_REFRESH_TOKEN and restart the service."
+            )
         if not _access_token or time.monotonic() > (_token_expires - TOKEN_REFRESH_MARGIN):
             await _refresh_access_token()
         return _access_token
@@ -215,6 +262,53 @@ async def _get_auth_headers() -> dict:
         "Referer": "https://suno.com/",
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
     }
+
+
+def _tool_response(message: str, status: str = "ok", **meta: object) -> str:
+    """Return tool output in text (default) or JSON format for agent clients."""
+    payload: dict[str, object] = {"status": status, "message": message}
+    if meta:
+        payload["meta"] = meta
+
+    if TOOL_RESPONSE_FORMAT == "json":
+        return json.dumps(payload, ensure_ascii=False)
+
+    if not meta:
+        return message
+
+    meta_lines = [f"{k}: {v}" for k, v in meta.items()]
+    return message + "\n" + "\n".join(meta_lines)
+
+
+async def _send_auth_notification(reason: str, detail: str = "") -> None:
+    """Send optional auth failure notification to generic/slack/discord webhooks."""
+    targets = [
+        u
+        for u in [
+            AUTH_NOTIFY_WEBHOOK_URL,
+            AUTH_NOTIFY_SLACK_WEBHOOK_URL,
+            AUTH_NOTIFY_DISCORD_WEBHOOK_URL,
+        ]
+        if u
+    ]
+    if not targets:
+        return
+
+    message = (
+        "Suno MCP auth state changed to reauth_required. "
+        f"reason={reason}. Rotate SUNO_REFRESH_TOKEN and restart service."
+    )
+    if detail:
+        message += f" detail={detail[:300]}"
+
+    body = {"text": message, "content": message}
+
+    async with httpx.AsyncClient() as client:
+        for url in targets:
+            try:
+                await client.post(url, json=body, timeout=10)
+            except Exception as e:
+                logger.warning("Auth notification failed for %s: %s", url, e)
 
 
 def _generate_fallback_title() -> str:
@@ -319,7 +413,6 @@ async def _poll_generation(
     client: httpx.AsyncClient, clip_ids: list[str], timeout: int = 300
 ) -> list[dict]:
     """Poll for generation completion."""
-    headers = await _get_auth_headers()
     start_time = asyncio.get_event_loop().time()
 
     while True:
@@ -328,6 +421,7 @@ async def _poll_generation(
             raise TimeoutError(f"Generation timed out after {timeout}s")
 
         ids_param = ",".join(clip_ids)
+        headers = await _get_auth_headers()
         resp = await client.get(
             f"{SUNO_API_BASE}/api/feed/v2?ids={ids_param}",
             headers=headers,
@@ -432,7 +526,17 @@ async def generate_liquid_dnb(
             )
 
             if resp.status_code == 401:
-                return "Error: Session token expired. Please update SUNO_SESSION_TOKEN."
+                global _auth_state, _last_auth_error, _reauth_required_since
+                _auth_state = "reauth_required"
+                _last_auth_error = "Suno API returned 401 during generation request"
+                if _reauth_required_since is None:
+                    _reauth_required_since = time.time()
+                await _send_auth_notification("suno_generate_401", _last_auth_error)
+                return _tool_response(
+                    "Authentication failed (401). Please update SUNO_REFRESH_TOKEN and restart.",
+                    status="error",
+                    code="AUTH_401",
+                )
             if resp.status_code == 402:
                 return "Error: Insufficient credits."
 
@@ -507,7 +611,17 @@ async def get_credits() -> str:
             )
 
             if resp.status_code == 401:
-                return "Error: Session token expired. Please update SUNO_SESSION_TOKEN."
+                global _auth_state, _last_auth_error, _reauth_required_since
+                _auth_state = "reauth_required"
+                _last_auth_error = "Suno API returned 401 during billing request"
+                if _reauth_required_since is None:
+                    _reauth_required_since = time.time()
+                await _send_auth_notification("suno_billing_401", _last_auth_error)
+                return _tool_response(
+                    "Authentication failed (401). Please update SUNO_REFRESH_TOKEN and restart.",
+                    status="error",
+                    code="AUTH_401",
+                )
 
             resp.raise_for_status()
             data = resp.json()
@@ -520,6 +634,168 @@ async def get_credits() -> str:
             return f"Credits: {total} remaining ({period})\nMonthly: {monthly_usage}/{monthly_limit} used"
     except Exception as e:
         return f"Error: {e}"
+
+
+@mcp.tool()
+async def get_auth_status() -> str:
+    """Get Suno authentication health status and re-auth guidance."""
+    last_refresh = "never"
+    if _last_refresh_at:
+        age = max(0, int(time.time() - _last_refresh_at))
+        last_refresh = f"{age}s ago"
+
+    reauth_since = "n/a"
+    if _reauth_required_since:
+        age = max(0, int(time.time() - _reauth_required_since))
+        reauth_since = f"{age}s ago"
+
+    if TOOL_RESPONSE_FORMAT == "json":
+        return _tool_response(
+            "Authentication status snapshot.",
+            status="ok" if _auth_state == "ok" else "error",
+            auth_state=_auth_state,
+            last_refresh=last_refresh,
+            consecutive_refresh_failures=f"{_consecutive_refresh_failures}/{MAX_REFRESH_FAILURES}",
+            reauth_required_since=reauth_since,
+            last_auth_error=_last_auth_error or "",
+            action=(
+                "Rotate SUNO_REFRESH_TOKEN (__client) secret and restart the MCP server."
+                if _auth_state == "reauth_required"
+                else "none"
+            ),
+        )
+
+    lines = [
+        f"auth_state: {_auth_state}",
+        f"last_refresh: {last_refresh}",
+        f"consecutive_refresh_failures: {_consecutive_refresh_failures}/{MAX_REFRESH_FAILURES}",
+        f"reauth_required_since: {reauth_since}",
+    ]
+    if _last_auth_error:
+        lines.append(f"last_auth_error: {_last_auth_error}")
+
+    if _auth_state == "reauth_required":
+        lines.append(
+            "action: Rotate SUNO_REFRESH_TOKEN (__client) secret and restart the MCP server."
+        )
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_cookie_capture_helper() -> str:
+    """Return an easy copy/paste helper to capture Suno __client cookie without manual cookie hunting."""
+    snippet = """javascript:(async()=>{
+try{
+  const clientCookie=document.cookie.split('; ').find(v=>v.startsWith('__client='));
+  if(!clientCookie){alert('__client cookie not found. Make sure you are logged in on suno.com');return;}
+  const refreshToken=clientCookie.split('=')[1];
+  const url='https://clerk.suno.com/v1/client?_is_native=true&_clerk_js_version=5.56.0';
+  const res=await fetch(url,{headers:{Authorization:refreshToken}});
+  const data=await res.json();
+  const sessionId=data?.response?.last_active_session_id||'';
+  const out=`SUNO_REFRESH_TOKEN=${refreshToken}\nSUNO_SESSION_ID=${sessionId}`;
+  await navigator.clipboard.writeText(out);
+  alert('Copied SUNO_REFRESH_TOKEN (+ session id) to clipboard.');
+}catch(e){alert('Failed: '+e);}
+})();"""
+
+    return (
+        "Cookie取得を簡単化するヘルパーです。\n\n"
+        "1) suno.com にログイン済みブラウザでブックマークを新規作成\n"
+        "2) URL欄に下記の `javascript:` から始まる文字列を貼り付け\n"
+        "3) suno.com を開いた状態でそのブックマークを実行\n"
+        "4) クリップボードへ `SUNO_REFRESH_TOKEN=...` が自動コピーされます\n\n"
+        "--- bookmarklet ---\n"
+        f"{snippet}\n"
+        "--- end ---\n\n"
+        "備考: session id も同時にコピーしますが、通常運用では SUNO_REFRESH_TOKEN のみ設定すればOKです。"
+    )
+
+
+@mcp.tool()
+async def validate_suno_refresh_token(candidate: str) -> str:
+    """Validate a user-provided Suno refresh token and classify expiry/failure causes."""
+    token = candidate.strip()
+    if not token:
+        return _tool_response("Empty token.", status="error", reason="empty_input")
+
+    # Allow input like '__client=xxxx' or 'Cookie: __client=xxxx; ...'
+    m = re.search(r"__client=([^;\s]+)", token)
+    if m:
+        token = m.group(1)
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{CLERK_BASE}/v1/client",
+                params={"_is_native": "true", "_clerk_js_version": CLERK_JS_VERSION},
+                headers={"Authorization": token},
+                timeout=20,
+            )
+
+            if resp.status_code == 401:
+                return _tool_response(
+                    "Invalid or expired token (401). Please re-login on suno.com and recapture __client.",
+                    status="error",
+                    reason="expired_or_invalid",
+                    classification="reauth_required",
+                )
+            if resp.status_code == 403:
+                return _tool_response(
+                    "Token rejected (403). Account protection or permission mismatch is likely.",
+                    status="error",
+                    reason="forbidden",
+                    classification="security_policy",
+                )
+            if resp.status_code == 429:
+                return _tool_response(
+                    "Rate limited by Clerk (429). Retry later and avoid repeated attempts.",
+                    status="error",
+                    reason="rate_limited",
+                    classification="retry_later",
+                )
+
+            resp.raise_for_status()
+            data = resp.json()
+            client_obj = data.get("response", data)
+            session_id = client_obj.get("last_active_session_id") or "(not found)"
+
+            sessions = client_obj.get("sessions", [])
+            expires_at = None
+            for sess in sessions:
+                if sess.get("id") == session_id:
+                    expires_at = sess.get("expire_at") or sess.get("expires_at")
+                    break
+
+            return _tool_response(
+                "Token is valid. Set SUNO_REFRESH_TOKEN in your secret manager and restart MCP server.",
+                status="ok",
+                classification="valid",
+                last_active_session_id=session_id,
+                expires_at=expires_at or "unknown",
+            )
+    except httpx.TimeoutException:
+        return _tool_response(
+            "Validation timed out. Network or Clerk availability issue.",
+            status="error",
+            reason="timeout",
+            classification="transient",
+        )
+    except httpx.HTTPStatusError as e:
+        return _tool_response(
+            f"HTTP error during validation: {e.response.status_code}",
+            status="error",
+            reason="http_error",
+            classification="unknown_http",
+        )
+    except Exception as e:
+        return _tool_response(
+            f"Validation error: {e}",
+            status="error",
+            reason="unexpected",
+            classification="unexpected",
+        )
 
 
 @mcp.tool()
