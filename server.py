@@ -383,7 +383,7 @@ async def generate_liquid_dnb(
 
         # Build generation payload (v2-web format)
         # Note: All fields must match browser request format exactly
-        payload = {
+        payload: dict = {
             "token": None,
             "generation_type": "TEXT",
             "title": title,
