@@ -28,6 +28,7 @@ class BrowserSession:
         self._initialized = False
         self._lock = asyncio.Lock()
         self._last_nav_time: float = 0.0
+        self._nav_count: int = 0
 
     async def initialize(self) -> None:
         """Launch Chromium, inject cookies, navigate to suno.com/create."""
@@ -84,7 +85,12 @@ class BrowserSession:
         # Auto-recover on crash
         self._page.on("crash", self._on_page_crash)
 
+        # Track navigations to detect SPA redirects
+        self._nav_count = 0
+        self._page.on("framenavigated", self._on_frame_navigated)
+
         # Navigate to create page (loads hCaptcha JS)
+        # Use domcontentloaded — networkidle hangs on SPAs with persistent connections
         logger.info("Navigating to suno.com/create...")
         await self._page.goto(
             "https://suno.com/create",
@@ -92,25 +98,74 @@ class BrowserSession:
             timeout=60000,
         )
 
-        # Wait for hCaptcha JS to load
+        # Wait for SPA client-side routing to settle (monitors frame navigations)
+        await self._wait_for_page_stable()
+
+        # SPA may redirect /create → /home (Clerk auth flow).
+        # If not on /create, navigate there explicitly.
+        current_url = self._page.url
+        if "/create" not in current_url:
+            logger.info(
+                "Redirected to %s instead of /create. Re-navigating...", current_url
+            )
+            await self._page.goto(
+                "https://suno.com/create",
+                wait_until="domcontentloaded",
+                timeout=60000,
+            )
+            await self._wait_for_page_stable()
+
+        # Wait for hCaptcha JS to load (after page is stable)
         await self._wait_for_hcaptcha()
 
         self._initialized = True
         self._last_nav_time = time.monotonic()
-        logger.info("Browser session initialized successfully.")
+        final_url = self._page.url
+        logger.info("Browser session initialized. Final URL: %s", final_url)
+
+    async def _wait_for_page_stable(self, settle_time: float = 3.0, max_wait: float = 30.0) -> None:
+        """Wait for SPA client-side navigations to settle.
+
+        Monitors navigation count and waits until no new navigations occur
+        for ``settle_time`` seconds.
+        """
+        deadline = time.monotonic() + max_wait
+        while time.monotonic() < deadline:
+            nav_before = self._nav_count
+            await asyncio.sleep(settle_time)
+            if self._nav_count == nav_before:
+                logger.info(
+                    "Page stable after %d navigations. URL: %s",
+                    self._nav_count,
+                    self._page.url,
+                )
+                return
+            logger.info(
+                "Page still navigating (count=%d), waiting...", self._nav_count
+            )
+        logger.warning("Page did not stabilize within %.0fs", max_wait)
 
     async def _wait_for_hcaptcha(self, timeout: float = 30.0) -> None:
         """Wait until hcaptcha.execute is available on the page."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            has_hcaptcha = await self._page.evaluate(
-                "typeof window.hcaptcha !== 'undefined' && typeof window.hcaptcha.execute === 'function'"
-            )
-            if has_hcaptcha:
-                logger.info("hCaptcha JS loaded and ready.")
-                return
+            try:
+                has_hcaptcha = await self._page.evaluate(
+                    "typeof window.hcaptcha !== 'undefined' && typeof window.hcaptcha.execute === 'function'"
+                )
+                if has_hcaptcha:
+                    logger.info("hCaptcha JS loaded and ready.")
+                    return
+            except Exception as e:
+                logger.debug("hCaptcha check failed (page may be navigating): %s", e)
             await asyncio.sleep(1.0)
         logger.warning("hCaptcha JS not detected after %.0fs — will attempt anyway.", timeout)
+
+    def _on_frame_navigated(self, frame: Any) -> None:
+        """Track main-frame navigations for stability detection."""
+        if frame == self._page.main_frame:
+            self._nav_count += 1
+            logger.info("Frame navigated (#%d): %s", self._nav_count, frame.url)
 
     def _on_page_crash(self, _page: Any) -> None:
         logger.error("Page crashed! Will re-initialize on next request.")
@@ -128,6 +183,7 @@ class BrowserSession:
             logger.info("Session refresh: reloading create page...")
             try:
                 await self._page.reload(wait_until="domcontentloaded", timeout=60000)
+                await self._wait_for_page_stable()
                 await self._wait_for_hcaptcha()
                 self._last_nav_time = time.monotonic()
             except Exception as e:
@@ -143,6 +199,20 @@ class BrowserSession:
         """
         async with self._lock:
             await self._ensure_session()
+
+            # Verify we're on /create — SPA may have navigated away
+            current_url = self._page.url
+            if "/create" not in current_url:
+                logger.info("Page drifted to %s, re-navigating to /create", current_url)
+                await self._page.goto(
+                    "https://suno.com/create",
+                    wait_until="domcontentloaded",
+                    timeout=60000,
+                )
+                await self._wait_for_page_stable()
+
+            # Re-verify hCaptcha is still available
+            await self._wait_for_hcaptcha(timeout=15.0)
 
             try:
                 token = await self._page.evaluate("""
@@ -181,6 +251,12 @@ class BrowserSession:
         """
         async with self._lock:
             await self._ensure_session()
+
+            # Ensure page is stable before executing
+            try:
+                await self._page.wait_for_load_state("domcontentloaded", timeout=15000)
+            except Exception as e:
+                logger.warning("wait_for_load_state failed before browser fetch: %s", e)
 
             try:
                 result = await self._page.evaluate(
