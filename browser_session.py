@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import time
+from typing import Any
 
 logger = logging.getLogger("aoi-suno-mcp.browser")
 
@@ -20,10 +21,10 @@ class BrowserSession:
     """Persistent Chromium session for hCaptcha token acquisition."""
 
     def __init__(self) -> None:
-        self._playwright = None
-        self._browser = None
-        self._context = None
-        self._page = None
+        self._playwright: Any = None
+        self._browser: Any = None
+        self._context: Any = None
+        self._page: Any = None
         self._initialized = False
         self._lock = asyncio.Lock()
         self._last_nav_time: float = 0.0
@@ -111,7 +112,7 @@ class BrowserSession:
             await asyncio.sleep(1.0)
         logger.warning("hCaptcha JS not detected after %.0fs — will attempt anyway.", timeout)
 
-    def _on_page_crash(self, _page) -> None:
+    def _on_page_crash(self, _page: Any) -> None:
         logger.error("Page crashed! Will re-initialize on next request.")
         self._initialized = False
 
@@ -159,7 +160,7 @@ class BrowserSession:
 
                 if token and isinstance(token, str) and len(token) > 20:
                     logger.info("hCaptcha token acquired (len=%d)", len(token))
-                    return token
+                    return str(token)
 
                 logger.warning("hCaptcha returned invalid token: %s", repr(token)[:100])
                 return None
@@ -168,7 +169,9 @@ class BrowserSession:
                 logger.error("hCaptcha token acquisition failed: %s", e)
                 return None
 
-    async def generate_via_browser(self, payload: dict, bearer_token: str) -> dict | None:
+    async def generate_via_browser(
+        self, payload: dict[str, Any], bearer_token: str
+    ) -> dict[str, Any] | None:
         """Fallback: execute generation request via browser's fetch().
 
         This bypasses the need for a separate hCaptcha token since the
@@ -210,7 +213,7 @@ class BrowserSession:
 
                 if result and not result.get("error"):
                     logger.info("Browser-based generation succeeded.")
-                    return result
+                    return dict(result)
 
                 logger.error("Browser-based generation failed: %s", result)
                 return None
