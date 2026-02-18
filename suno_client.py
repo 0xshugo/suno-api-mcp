@@ -1,12 +1,12 @@
+import base64
+import json
 import os
-import requests
 import threading
 import time
-import json
-import base64
 import uuid
 from typing import Any
 
+import requests
 
 SUNO_COOKIE = os.getenv("SUNO_COOKIE")
 if not SUNO_COOKIE:
@@ -38,7 +38,9 @@ class SunoV2Client:
         self._stop_event = threading.Event()
 
         self.refresh_token = self._extract_refresh_token(self.cookie)
-        self.session_id = self._extract_session_id_from_cookie(self.cookie) or self._fetch_session_id()
+        self.session_id = (
+            self._extract_session_id_from_cookie(self.cookie) or self._fetch_session_id()
+        )
 
         self._refresh_access_token()
 
@@ -70,10 +72,7 @@ class SunoV2Client:
         return ""
 
     def _clerk_url(self, path: str) -> str:
-        return (
-            f"{self.CLERK_BASE}{path}"
-            f"?_is_native=true&_clerk_js_version={self.CLERK_JS_VERSION}"
-        )
+        return f"{self.CLERK_BASE}{path}?_is_native=true&_clerk_js_version={self.CLERK_JS_VERSION}"
 
     def _fetch_session_id(self) -> str:
         response = self.session.get(
@@ -86,9 +85,8 @@ class SunoV2Client:
         )
         response.raise_for_status()
         data = response.json()
-        session_id = (
-            data.get("response", {}).get("last_active_session_id")
-            or data.get("last_active_session_id")
+        session_id = data.get("response", {}).get("last_active_session_id") or data.get(
+            "last_active_session_id"
         )
         if not session_id:
             raise RuntimeError("Unable to resolve last_active_session_id from Clerk API response")
@@ -129,7 +127,9 @@ class SunoV2Client:
             "Content-Type": "application/json",
         }
 
-    def generate(self, prompt: str, tags: str, title: str, make_instrumental: bool = False) -> dict[str, Any]:
+    def generate(
+        self, prompt: str, tags: str, title: str, make_instrumental: bool = False
+    ) -> dict[str, Any]:
         payload = {
             "token": None,
             "generation_type": "TEXT",
