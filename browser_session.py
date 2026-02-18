@@ -71,10 +71,12 @@ class BrowserSession:
             "secure": True,
             "sameSite": "None",
         }
-        await self._context.add_cookies([
-            {**cookie_base, "domain": ".suno.com"},
-            {**cookie_base, "domain": ".clerk.suno.com"},
-        ])
+        await self._context.add_cookies(
+            [
+                {**cookie_base, "domain": ".suno.com"},
+                {**cookie_base, "domain": ".clerk.suno.com"},
+            ]
+        )
 
         self._page = await self._context.new_page()
 
@@ -166,9 +168,7 @@ class BrowserSession:
                 logger.error("hCaptcha token acquisition failed: %s", e)
                 return None
 
-    async def generate_via_browser(
-        self, payload: dict, bearer_token: str
-    ) -> dict | None:
+    async def generate_via_browser(self, payload: dict, bearer_token: str) -> dict | None:
         """Fallback: execute generation request via browser's fetch().
 
         This bypasses the need for a separate hCaptcha token since the
