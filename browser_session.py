@@ -105,9 +105,7 @@ class BrowserSession:
         # If not on /create, navigate there explicitly.
         current_url = self._page.url
         if "/create" not in current_url:
-            logger.info(
-                "Redirected to %s instead of /create. Re-navigating...", current_url
-            )
+            logger.info("Redirected to %s instead of /create. Re-navigating...", current_url)
             await self._page.goto(
                 "https://suno.com/create",
                 wait_until="domcontentloaded",
@@ -140,9 +138,7 @@ class BrowserSession:
                     self._page.url,
                 )
                 return
-            logger.info(
-                "Page still navigating (count=%d), waiting...", self._nav_count
-            )
+            logger.info("Page still navigating (count=%d), waiting...", self._nav_count)
         logger.warning("Page did not stabilize within %.0fs", max_wait)
 
     async def _wait_for_hcaptcha(self, timeout: float = 30.0) -> None:
