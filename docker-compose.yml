@@ -1,13 +1,20 @@
 services:
-  suno-mcp:
+  aoi-suno-mcp:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: suno-mcp
+    container_name: aoi-suno-mcp
     restart: unless-stopped
+    init: true
+    shm_size: '256m'
     env_file:
-      - .env
-    ports:
-      - "8888:8888"
+      - suno_cookie.env
+      - gdrive.env
     volumes:
       - ./music_data:/data/music
+    networks:
+      - ai_network
+
+networks:
+  ai_network:
+    external: true
