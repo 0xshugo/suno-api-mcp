@@ -21,6 +21,7 @@ from typing import Literal
 import httpx
 from mcp.server.fastmcp import FastMCP
 
+from browser_session import BrowserSession
 from gdrive_client import GDriveClient
 
 logging.basicConfig(
@@ -89,6 +90,18 @@ def _get_gdrive() -> GDriveClient:
     if _gdrive is None:
         _gdrive = GDriveClient()
     return _gdrive
+
+
+_browser_session: BrowserSession | None = None
+
+
+async def _get_browser_session() -> BrowserSession:
+    """Lazy-initialize and return the shared BrowserSession."""
+    global _browser_session
+    if _browser_session is None:
+        _browser_session = BrowserSession()
+    await _browser_session.initialize()
+    return _browser_session
 
 
 # DnB-flavoured fallback title words
@@ -463,10 +476,18 @@ async def generate_liquid_dnb(
     try:
         headers = await _get_auth_headers()
 
+        # Acquire hCaptcha token via browser session
+        hcaptcha_token = None
+        try:
+            browser = await _get_browser_session()
+            hcaptcha_token = await browser.get_hcaptcha_token()
+        except Exception as e:
+            logger.warning("hCaptcha token acquisition failed: %s", e)
+
         # Build generation payload (v2-web format)
         # Note: All fields must match browser request format exactly
         payload: dict = {
-            "token": None,
+            "token": hcaptcha_token,
             "generation_type": "TEXT",
             "title": title,
             "tags": tags,
@@ -527,8 +548,26 @@ async def generate_liquid_dnb(
             if resp.status_code == 402:
                 return "Error: Insufficient credits."
 
-            resp.raise_for_status()
-            gen_data = resp.json()
+            # hCaptcha token rejected — fallback to browser-based generation
+            if resp.status_code == 422:
+                logger.warning(
+                    "API returned 422 (likely hCaptcha rejection). "
+                    "Falling back to browser-based generation."
+                )
+                try:
+                    browser = await _get_browser_session()
+                    bearer_token = await _ensure_token()
+                    gen_data = await browser.generate_via_browser(payload, bearer_token)
+                    if not gen_data:
+                        return (
+                            "Error: Generation failed — both direct API (422) and "
+                            "browser fallback returned no data."
+                        )
+                except Exception as fb_err:
+                    return f"Error: API returned 422 and browser fallback failed: {fb_err}"
+            else:
+                resp.raise_for_status()
+                gen_data = resp.json()
 
             clips = gen_data.get("clips", [])
             if not clips:
