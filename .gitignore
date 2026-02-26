@@ -3,6 +3,13 @@
 *.env
 !.env.example
 
+# Credential / key files
+credentials.json
+service_account.json
+token.json
+*.pem
+*.key
+
 # Python
 __pycache__/
 *.py[cod]

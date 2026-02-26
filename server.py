@@ -1123,8 +1123,7 @@ async def download_clips(
 
             # Filter to complete clips with audio
             downloadable = [
-                c for c in clips_to_download
-                if c.get("status") == "complete" and c.get("audio_url")
+                c for c in clips_to_download if c.get("status") == "complete" and c.get("audio_url")
             ]
 
             if not downloadable:
