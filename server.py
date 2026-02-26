@@ -16,7 +16,7 @@ import time
 import unicodedata
 import uuid
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -900,8 +900,9 @@ async def _fetch_feed_page(
     client: httpx.AsyncClient,
     page: int = 0,
     ids: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Fetch a single page from /api/feed/v2 with auto token refresh."""
+    empty: dict[str, Any] = {"clips": [], "has_more": False}
     params: dict[str, str] = {}
     if ids:
         params["ids"] = ids
@@ -929,10 +930,11 @@ async def _fetch_feed_page(
             if attempt == 0:
                 await asyncio.sleep(1)
                 continue
-            return {"clips": [], "has_more": False}
-        return resp.json()
+            return empty
+        data: dict[str, Any] = resp.json()
+        return data
 
-    return {"clips": [], "has_more": False}
+    return empty
 
 
 def _format_clip_summary(clip: dict) -> str:
