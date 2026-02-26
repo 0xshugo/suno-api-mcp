@@ -889,6 +889,385 @@ async def delete_track(filename: str, output_dir: str = "library") -> str:
     return f"Deleted: {filename} from {output_dir}."
 
 
+# ---------------------------------------------------------------------------
+# Library / Feed v2 API tools
+# ---------------------------------------------------------------------------
+
+FEED_PAGE_SIZE = 20  # Suno returns 20 clips per page
+
+
+async def _fetch_feed_page(
+    client: httpx.AsyncClient,
+    page: int = 0,
+    ids: str | None = None,
+) -> dict:
+    """Fetch a single page from /api/feed/v2 with auto token refresh."""
+    params: dict[str, str] = {}
+    if ids:
+        params["ids"] = ids
+    else:
+        params["page"] = str(page)
+
+    for attempt in range(2):
+        headers = await _get_auth_headers()
+        resp = await client.get(
+            f"{SUNO_API_BASE}/api/feed/v2",
+            headers=headers,
+            params=params,
+            timeout=30,
+        )
+        if resp.status_code == 401:
+            if attempt == 0:
+                # Force token refresh on first 401
+                global _access_token, _token_expires
+                _access_token = ""
+                _token_expires = 0.0
+                continue
+            raise RuntimeError("AUTH_401")
+        resp.raise_for_status()
+        if not resp.content:
+            if attempt == 0:
+                await asyncio.sleep(1)
+                continue
+            return {"clips": [], "has_more": False}
+        return resp.json()
+
+    return {"clips": [], "has_more": False}
+
+
+def _format_clip_summary(clip: dict) -> str:
+    """One-line summary of a clip."""
+    cid = clip.get("id", "?")
+    title = clip.get("title", "Untitled")
+    status = clip.get("status", "?")
+    model = clip.get("model_name", "?")
+    created = (clip.get("created_at") or "?")[:19]
+    duration = ""
+    md = clip.get("metadata")
+    if isinstance(md, dict) and md.get("duration"):
+        dur = md["duration"]
+        mins, secs = divmod(int(dur), 60)
+        duration = f" {mins}:{secs:02d}"
+    return f"{cid} | {title} | {status} | {model} | {created}{duration}"
+
+
+def _format_clip_detail(clip: dict) -> str:
+    """Multi-line detail of a clip."""
+    lines = [
+        f"id: {clip.get('id')}",
+        f"title: {clip.get('title')}",
+        f"status: {clip.get('status')}",
+        f"model: {clip.get('model_name')}",
+        f"created_at: {clip.get('created_at')}",
+        f"audio_url: {clip.get('audio_url')}",
+        f"image_url: {clip.get('image_url')}",
+        f"is_public: {clip.get('is_public')}",
+        f"play_count: {clip.get('play_count')}",
+        f"display_tags: {clip.get('display_tags')}",
+    ]
+    md = clip.get("metadata")
+    if isinstance(md, dict):
+        lines.append(f"duration: {md.get('duration')}")
+        lines.append(f"tags: {md.get('tags', '')}")
+        prompt = str(md.get("prompt", ""))
+        if prompt:
+            lines.append(f"prompt: {prompt[:200]}")
+        lines.append(f"make_instrumental: {md.get('make_instrumental')}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_library(
+    page: int = 0,
+    fetch_all: bool = False,
+    max_pages: int = 50,
+) -> str:
+    """List clips in your Suno library (all tracks you've ever generated).
+
+    Args:
+        page: Page number (0-indexed, 20 clips per page). Ignored if fetch_all=True.
+        fetch_all: If True, fetch ALL pages and return complete list (slower).
+        max_pages: Safety limit when fetch_all=True (default 50 = up to 1000 clips).
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            if not fetch_all:
+                data = await _fetch_feed_page(client, page=page)
+                clips = data.get("clips", [])
+                has_more = data.get("has_more", False)
+                current_page = data.get("current_page", page)
+
+                if not clips:
+                    return f"No clips on page {page}."
+
+                lines = [f"Page {current_page} ({len(clips)} clips, has_more={has_more}):"]
+                for c in clips:
+                    lines.append(f"  {_format_clip_summary(c)}")
+                return "\n".join(lines)
+
+            # Fetch all pages
+            all_clips: list[dict] = []
+            current = 0
+            while current < max_pages:
+                data = await _fetch_feed_page(client, page=current)
+                clips = data.get("clips", [])
+                if not clips:
+                    break
+                all_clips.extend(clips)
+                if not data.get("has_more", False):
+                    break
+                current += 1
+                await asyncio.sleep(0.5)  # Rate limit protection
+
+            if not all_clips:
+                return "Library is empty."
+
+            lines = [f"Total: {len(all_clips)} clips ({current + 1} pages fetched):"]
+            for c in all_clips:
+                lines.append(f"  {_format_clip_summary(c)}")
+            return "\n".join(lines)
+
+    except RuntimeError as e:
+        if "AUTH_401" in str(e):
+            return _tool_response(
+                "Authentication failed (401). Please update SUNO_REFRESH_TOKEN and restart.",
+                status="error",
+                code="AUTH_401",
+            )
+        return f"Error: {e}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+async def get_clip(clip_id: str) -> str:
+    """Get detailed information about a specific Suno clip by its ID.
+
+    Args:
+        clip_id: The UUID of the clip (e.g. "eb479212-e649-4ccc-8a06-93e1ff09de0f").
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            data = await _fetch_feed_page(client, ids=clip_id.strip())
+            clips = data.get("clips", [])
+            if not clips:
+                return f"Clip not found: {clip_id}"
+            return _format_clip_detail(clips[0])
+    except RuntimeError as e:
+        if "AUTH_401" in str(e):
+            return _tool_response(
+                "Authentication failed (401). Please update SUNO_REFRESH_TOKEN and restart.",
+                status="error",
+                code="AUTH_401",
+            )
+        return f"Error: {e}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+async def download_clips(
+    clip_ids: str = "",
+    output_dir: Literal["ch1", "ch2", "library", "gdrive"] = "library",
+    page: int = 0,
+    download_all: bool = False,
+    max_pages: int = 50,
+    delay: float = 1.5,
+) -> str:
+    """Download clips from your Suno library as WAV files.
+
+    Args:
+        clip_ids: Comma-separated clip IDs to download. If empty and download_all=False,
+                  downloads clips from the specified page.
+        output_dir: Output destination. "ch1", "ch2", "library" (default), "gdrive".
+        page: Page number to download (0-indexed). Ignored if clip_ids or download_all is set.
+        download_all: If True, download ALL clips in your library (use with caution).
+        max_pages: Safety limit for download_all (default 50 = up to 1000 clips).
+        delay: Seconds to wait between downloads to avoid rate limiting (default 1.5).
+    """
+    _ensure_output_dirs()
+    dest_dir, upload_gdrive = _resolve_output_dir(output_dir)
+
+    if upload_gdrive and not GDRIVE_MUSIC_FOLDER_ID:
+        return "Error: GDRIVE_MUSIC_FOLDER_ID is not configured."
+
+    try:
+        async with httpx.AsyncClient() as client:
+            # Resolve which clips to download
+            clips_to_download: list[dict] = []
+
+            if clip_ids:
+                # Specific clip IDs
+                data = await _fetch_feed_page(client, ids=clip_ids.strip())
+                clips_to_download = data.get("clips", [])
+            elif download_all:
+                # All pages
+                current = 0
+                while current < max_pages:
+                    data = await _fetch_feed_page(client, page=current)
+                    clips = data.get("clips", [])
+                    if not clips:
+                        break
+                    clips_to_download.extend(clips)
+                    if not data.get("has_more", False):
+                        break
+                    current += 1
+                    await asyncio.sleep(0.5)
+            else:
+                # Single page
+                data = await _fetch_feed_page(client, page=page)
+                clips_to_download = data.get("clips", [])
+
+            if not clips_to_download:
+                return "No clips to download."
+
+            # Filter to complete clips with audio
+            downloadable = [
+                c for c in clips_to_download
+                if c.get("status") == "complete" and c.get("audio_url")
+            ]
+
+            if not downloadable:
+                return f"No downloadable clips found ({len(clips_to_download)} total, none complete with audio)."
+
+            results: list[str] = []
+            success_count = 0
+            fail_count = 0
+
+            for i, clip in enumerate(downloadable):
+                track = {
+                    "id": clip["id"],
+                    "title": clip.get("title") or "Untitled",
+                    "audio_url": clip.get("audio_url"),
+                    "audio_url_wav": clip.get("audio_url_wav"),
+                    "wav_url": clip.get("wav_url"),
+                }
+
+                try:
+                    path = await _download_wav(client, track, dest_dir)
+                    line = f"OK: {path.name}"
+
+                    if upload_gdrive:
+                        try:
+                            gdrive = _get_gdrive()
+                            gdrive_resp = await gdrive.upload_file(path, GDRIVE_MUSIC_FOLDER_ID)
+                            file_id = gdrive_resp["id"]
+                            line += f" -> GDrive({file_id})"
+                        except Exception as ge:
+                            line += f" (GDrive failed: {ge})"
+
+                    results.append(line)
+                    success_count += 1
+                except Exception as e:
+                    results.append(f"FAIL: {track['title']} ({clip['id'][:8]}...): {e}")
+                    fail_count += 1
+
+                # Rate limit
+                if i < len(downloadable) - 1:
+                    await asyncio.sleep(delay)
+
+            summary = f"Downloaded {success_count}/{len(downloadable)} clips"
+            if fail_count:
+                summary += f" ({fail_count} failed)"
+            results.insert(0, summary)
+            return "\n".join(results)
+
+    except RuntimeError as e:
+        if "AUTH_401" in str(e):
+            return _tool_response(
+                "Authentication failed (401). Please update SUNO_REFRESH_TOKEN and restart.",
+                status="error",
+                code="AUTH_401",
+            )
+        return f"Error: {e}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+async def get_playlists() -> str:
+    """List all playlists in your Suno account."""
+    try:
+        headers = await _get_auth_headers()
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{SUNO_API_BASE}/api/playlist/me/",
+                headers=headers,
+                timeout=30,
+            )
+            if resp.status_code == 401:
+                return _tool_response(
+                    "Authentication failed (401). Please update SUNO_REFRESH_TOKEN and restart.",
+                    status="error",
+                    code="AUTH_401",
+                )
+            resp.raise_for_status()
+            data = resp.json()
+
+            playlists = data.get("playlists", [])
+            if not playlists:
+                return "No playlists found."
+
+            lines = [f"{len(playlists)} playlists:"]
+            for p in playlists:
+                pid = p.get("id", "?")
+                name = p.get("name", "Untitled")
+                song_count = p.get("song_count", p.get("num_total_results", "?"))
+                is_public = p.get("is_public", False)
+                vis = "public" if is_public else "private"
+                lines.append(f"  {pid} | {name} | {song_count} songs | {vis}")
+            return "\n".join(lines)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+async def get_playlist_clips(
+    playlist_id: str,
+    page: int = 0,
+) -> str:
+    """List clips in a specific Suno playlist.
+
+    Args:
+        playlist_id: The UUID of the playlist.
+        page: Page number (0-indexed).
+    """
+    try:
+        headers = await _get_auth_headers()
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{SUNO_API_BASE}/api/playlist/{playlist_id.strip()}/",
+                headers=headers,
+                params={"page": str(page)},
+                timeout=30,
+            )
+            if resp.status_code == 401:
+                return _tool_response(
+                    "Authentication failed (401). Please update SUNO_REFRESH_TOKEN and restart.",
+                    status="error",
+                    code="AUTH_401",
+                )
+            if resp.status_code == 404:
+                return f"Playlist not found: {playlist_id}"
+            resp.raise_for_status()
+            data = resp.json()
+
+            name = data.get("name", "Untitled")
+            has_more = data.get("has_more", False)
+            playlist_clips = data.get("playlist_clips", [])
+
+            if not playlist_clips:
+                return f"No clips in playlist '{name}' on page {page}."
+
+            lines = [f"Playlist: {name} (page {page}, has_more={has_more}):"]
+            for pc in playlist_clips:
+                clip = pc.get("clip", pc)
+                lines.append(f"  {_format_clip_summary(clip)}")
+            return "\n".join(lines)
+    except Exception as e:
+        return f"Error: {e}"
+
+
 if __name__ == "__main__":
     import sys
 

@@ -5,6 +5,8 @@ An MCP (Model Context Protocol) server for generating music via the Suno AI API.
 ## Features
 
 - **Music Generation**: Generate tracks using Suno's AI models (chirp-v4, chirp-v3-5, chirp-crow)
+- **Library Management**: Browse your full Suno library, view clip details, playlists (v3 Feed API)
+- **Bulk Download**: Download any or all clips from your library as WAV files
 - **WAV Output**: Automatically downloads tracks in WAV format (via direct download or ffmpeg conversion)
 - **Multiple Output Targets**: Save to different directories (library, ch1, ch2) or Google Drive
 - **Auto Token Refresh**: Supports Clerk-based authentication with automatic token refresh
@@ -216,6 +218,56 @@ Delete a track from an output directory.
 |------|------|---------|-------------|
 | `filename` | string | required | Exact filename to delete |
 | `output_dir` | string | "library" | Target directory |
+
+### `get_library`
+
+List clips in your Suno library (all tracks you've ever generated on suno.com).
+
+**Parameters:**
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `page` | integer | 0 | Page number (0-indexed, 20 clips/page) |
+| `fetch_all` | boolean | false | Fetch ALL pages (can be slow for large libraries) |
+| `max_pages` | integer | 50 | Safety limit for fetch_all (50 pages = 1000 clips) |
+
+### `get_clip`
+
+Get detailed information about a specific clip.
+
+**Parameters:**
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `clip_id` | string | required | UUID of the clip |
+
+Returns: id, title, status, model, audio_url, image_url, duration, tags, prompt, etc.
+
+### `download_clips`
+
+Download clips from your Suno library as WAV files.
+
+**Parameters:**
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `clip_ids` | string | "" | Comma-separated clip IDs (leave empty to use page/download_all) |
+| `output_dir` | string | "library" | Output target: "library", "ch1", "ch2", "gdrive" |
+| `page` | integer | 0 | Page to download (ignored if clip_ids or download_all set) |
+| `download_all` | boolean | false | Download ALL library clips (use with caution) |
+| `max_pages` | integer | 50 | Safety limit for download_all |
+| `delay` | float | 1.5 | Seconds between downloads (rate limit protection) |
+
+### `get_playlists`
+
+List all playlists in your Suno account.
+
+### `get_playlist_clips`
+
+List clips in a specific playlist.
+
+**Parameters:**
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `playlist_id` | string | required | UUID of the playlist |
+| `page` | integer | 0 | Page number (0-indexed) |
 
 ## Output Directories
 
